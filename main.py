@@ -203,7 +203,7 @@ class GroqAPI:
     async def chat(self, message: str, context: str = "", system_prompt: str = None) -> Optional[str]:
         try:
             if not system_prompt:
-                system_prompt = """أنت "حكيم" - المساعد الذكي لعيادة د. أحمد سمير عبدالحميد، متخصص في أمراض الجهاز الهضمي والكبد.
+                system_prompt = """أنت "حكيم" - المساعد الطبي الذكي لعيادة د. أحمد سمير عبدالحميد، متخصص في أمراض الجهاز الهضمي والكبد.
 
 معلومات العيادة:
 - الدكتور: أحمد سمير عبدالحميد
@@ -212,13 +212,16 @@ class GroqAPI:
 - التليفون: 01121173801
 - مواعيد الكشف: السبت والثلاثاء والأحد
 
-أسلوبك عامي ومريح وبتكلم الناس زي صاحبهم.
-لما حد يسلم عليك رد بطريقة حلوة ومرحة.
-بتتكلم بالعربي العامي المصري.
-لو السؤال طبي، اشرح بطريقة بسيطة وسهلة وفي الآخر قول إنه يتأكد من الدكتور.
-لو حد سأل عن الموعد أو العيادة، ديله المعلومات الصح.
-خليك قصير في ردودك ومش تطول غير لو السؤال يحتاج تفصيل.
-استخدم إيموجي بس متبالغش."""
+أسلوبك في الرد:
+- بتتكلم بالعربي الفصيح المبسط المفهوم لكل الناس
+- ردودك مفصلة ومنظمة وتشمل معلومات مفيدة حقيقية
+- لما حد يسلم أو يقول "إيه" أو "بقولك" أو كلام عام، رد بترحيب جميل واسأله إيه اللي يقدر يساعده فيه بخصوص أمراض الجهاز الهضمي والكبد
+- لما حد يسأل سؤال طبي، اشرحله الموضوع بتفصيل كافي: الأسباب، الأعراض، طرق التعامل معها
+- في نهاية كل رد طبي، أضف تنبيه: "⚠️ تنبيه: هذا النظام للمعلومات فقط. يُنصح دائماً باستشارة الطبيب المختص للتشخيص الدقيق والعلاج المناسب."
+- لو حد طلب استشارة أو قال محتاج مساعدة، اسأله يفصل أكتر: ما هي الأعراض أو الأسئلة التي يريد الاستفسار عنها؟
+- لو حد سأل عن موعد أو العيادة، ديله المعلومات الكاملة
+- استخدم إيموجي بشكل معتدل لتنظيم الرد
+- ردودك لازم تكون كافية ومفيدة وليست مختصرة جداً"""
 
             if context:
                 system_prompt += f"\nمعلومات المريض: {context}"
@@ -234,7 +237,7 @@ class GroqAPI:
                     {"role": "user", "content": message}
                 ],
                 "temperature": 0.7,
-                "max_tokens": 500
+                "max_tokens": 1000
             }
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(self.url, json=payload, headers=headers)
@@ -463,9 +466,9 @@ class MedicalBot:
             if response:
                 if patient:
                     self.db.save_chat(user_id, message, response, api_used)
-                response_text = response[:1000]
-                if len(response) > 1000:
-                    response_text += "\n\n...(مختصر)"
+                response_text = response[:2000]
+                if len(response) > 2000:
+                    response_text += "\n\n...(للمزيد، اسأل عن جزء محدد)"
                 await update.message.reply_text(f"🤖 {api_used}:\n\n{response_text}")
             else:
                 await update.message.reply_text("❌ خطأ في الرد. حاول مرة أخرى.")
@@ -523,76 +526,47 @@ class MedicalBot:
                 MessageHandler(filters.Regex("^متابعة الحجز$"), self.book_appointment),
             ],
             states={
-                STATE_BOOKING_START: [
-                    MessageHandler(filters.Regex("^تحديث البيانات$"), self.book_appointment),
-                    MessageHandler(filters.Regex("^متابعة الحجز$"), self.book_appointment),
-                    MessageHandler(filters.TEXT, self.booking_get_name),
-                ],
-                STATE_BOOKING_NAME: [MessageHandler(filters.TEXT, self.booking_get_name)],
-                STATE_BOOKING_PHONE: [MessageHandler(filters.TEXT, self.booking_get_phone)],
-                STATE_BOOKING_BRANCH: [MessageHandler(filters.TEXT, self.booking_get_branch)],
-                STATE_BOOKING_DATE: [MessageHandler(filters.TEXT, self.booking_get_date)],
-                STATE_BOOKING_CONFIRM: [MessageHandler(filters.TEXT, self.booking_confirm)],
+                STATE_BOOKING_START: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.book_appointment)],
+                STATE_BOOKING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.booking_get_name)],
+                STATE_BOOKING_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.booking_get_phone)],
+                STATE_BOOKING_BRANCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.booking_get_branch)],
+                STATE_BOOKING_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.booking_get_date)],
+                STATE_BOOKING_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.booking_confirm)],
             },
-            fallbacks=[MessageHandler(filters.Regex("^إلغاء$"), lambda u, c: ConversationHandler.END)]
+            fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)]
         )
 
         chat_handler = ConversationHandler(
             entry_points=[
                 MessageHandler(filters.Regex("^💬 محادثة ذكاء اصطناعي$"), self.chat_start),
-                MessageHandler(filters.Regex("^💬 محادثة$"), self.chat_start),
                 MessageHandler(filters.Regex("^🔬 تحليل طبي$"), self.chat_start),
             ],
             states={
-                STATE_CHAT_MODE: [MessageHandler(filters.TEXT, self.select_chat_mode)],
-                STATE_CHAT_INPUT: [
-                    MessageHandler(filters.Regex("^سؤال آخر$"), self.handle_chat),
-                    MessageHandler(filters.Regex("^تغيير الوضع$"), self.chat_start),
-                    MessageHandler(filters.TEXT & ~filters.Regex("^الرئيسية$|^خروج$"), self.handle_chat),
-                ],
+                STATE_CHAT_MODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.select_chat_mode)],
+                STATE_CHAT_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_chat)],
             },
-            fallbacks=[MessageHandler(filters.Regex("^الرئيسية$|^خروج$|^إلغاء$"), lambda u, c: ConversationHandler.END)]
+            fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)]
         )
 
         app.add_handler(CommandHandler("start", self.start))
         app.add_handler(CommandHandler("help", self.help_command))
-        app.add_handler(CommandHandler("profile", self.show_profile))
         app.add_handler(CommandHandler("stats", self.stats))
         app.add_handler(booking_handler)
         app.add_handler(chat_handler)
         app.add_handler(MessageHandler(filters.Regex("^👤 ملفي الشخصي$"), self.show_profile))
         app.add_handler(MessageHandler(filters.Regex("^❓ مساعدة$"), self.help_command))
-        app.add_handler(MessageHandler(filters.Regex("^🏠 الرئيسية$"), self.start))
-
-        # Handler عام لأي رسالة - الذكاء الاصطناعي يرد على أي كلام
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_general_message))
-
         app.add_error_handler(self.error_handler)
+
         return app
 
 
 def main():
-    logger.info("=" * 80)
-    logger.info("STARTING MEDICAL BOT - POLLING MODE")
-    logger.info("=" * 80)
-
-    if not TELEGRAM_TOKEN:
-        logger.error("CRITICAL: TELEGRAM_TOKEN not set")
-        sys.exit(1)
-
+    logger.info("Starting Medical Bot...")
     bot = MedicalBot()
     app = bot.create_handlers()
-
-    logger.info("Bot is now listening for messages...")
-    print("\n🚀 MEDICAL BOT STARTED SUCCESSFULLY\n")
-
-    try:
-        app.run_polling(allowed_updates=Update.ALL_TYPES)
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-    except Exception as e:
-        logger.error(f"CRITICAL ERROR: {str(e)}")
-        sys.exit(1)
+    logger.info("Bot is running! Press Ctrl+C to stop.")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
