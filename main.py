@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Medical Specialist Telegram Bot for GI/Liver Disease
-UPDATED VERSION WITH DEBUG LOGGING & POLLING
-Termux-compatible, modular, production-ready
-Features: Groq (fast chat), Gemini (medical reasoning), SQLite database, Two branches
-"""
 
 import os
 import sys
-import json
 import sqlite3
 import logging
 from datetime import datetime
@@ -17,25 +10,15 @@ from typing import Optional, Dict, List
 from pathlib import Path
 import asyncio
 
-# Telegram
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters, ContextTypes
 
-# HTTP Client
 import httpx
-
-# Environment - FIXED PATH HANDLING
 from dotenv import load_dotenv
 
-# ============================================================================
-# ENHANCED LOGGING CONFIGURATION
-# ============================================================================
-
-# Create logs directory if it doesn't exist
 logs_dir = Path("logs")
 logs_dir.mkdir(exist_ok=True)
 
-# Configure detailed logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - [%(funcName)s:%(lineno)d] - %(message)s',
@@ -51,15 +34,9 @@ logger.info("=" * 80)
 logger.info("MEDICAL BOT INITIALIZATION STARTED")
 logger.info("=" * 80)
 
-# ============================================================================
-# ENVIRONMENT SETUP - FIXED FOR TERMUX
-# ============================================================================
-
-# Get the directory of this script
 script_dir = Path(__file__).parent.absolute()
 logger.info(f"Script directory: {script_dir}")
 
-# Look for .env in the same directory as the script
 env_file = script_dir / ".env"
 logger.info(f"Looking for .env file at: {env_file}")
 
@@ -69,16 +46,13 @@ if env_file.exists():
 else:
     logger.warning(f"⚠ .env file not found at {env_file}")
     logger.warning("Falling back to checking current working directory...")
-    # Try loading from current working directory as fallback
     load_dotenv()
 
-# Tokens & APIs
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
-# Validate tokens
 logger.info("=" * 80)
 logger.info("VALIDATING REQUIRED TOKENS")
 logger.info("=" * 80)
@@ -97,7 +71,7 @@ else:
 if GEMINI_API_KEY:
     logger.info("✓ GEMINI_API_KEY is set")
 else:
-    logger.error("✗ GEMINI_API_KEY is NOT set")
+    logger.warning("✗ GEMINI_API_KEY is NOT set")
 
 if ADMIN_ID:
     logger.info(f"✓ ADMIN_ID is set to: {ADMIN_ID}")
@@ -106,19 +80,14 @@ else:
 
 logger.info("=" * 80)
 
-# API URLs
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
 
-# Branches
 BRANCHES = {
     "cairo": {"name": "Cairo", "address": "Address in Cairo", "phone": "+20XXXXXXXXX"},
     "sherbin": {"name": "Sherbin", "address": "Address in Sherbin", "phone": "+20XXXXXXXXX"}
 }
 
-logger.info(f"Branches configured: {list(BRANCHES.keys())}")
-
-# Conversation States
 STATE_BOOKING_START = 1
 STATE_BOOKING_NAME = 2
 STATE_BOOKING_PHONE = 3
@@ -128,27 +97,16 @@ STATE_BOOKING_CONFIRM = 6
 STATE_CHAT_INPUT = 7
 STATE_CHAT_MODE = 8
 
-logger.info("Conversation states initialized")
-
-# ============================================================================
-# DATABASE MANAGEMENT
-# ============================================================================
 
 class PatientDatabase:
-    """SQLite database for patient management"""
-    
     def __init__(self, db_path: str = "patients.db"):
         self.db_path = db_path
-        logger.info(f"Initializing database at: {db_path}")
         self.init_database()
-    
+
     def init_database(self):
-        """Initialize database schema"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
-            # Patients table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS patients (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -161,8 +119,6 @@ class PatientDatabase:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
-            # Chat history table (for context)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS chat_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,121 +130,93 @@ class PatientDatabase:
                     FOREIGN KEY(telegram_id) REFERENCES patients(telegram_id)
                 )
             ''')
-            
             conn.commit()
             conn.close()
             logger.info("✓ Database initialized successfully")
         except Exception as e:
             logger.error(f"✗ Database initialization error: {str(e)}")
             raise
-    
-    def add_patient(self, telegram_id: int, name: str, phone: str, branch: str, appointment_date: str = None) -> bool:
-        """Add or update patient"""
+
+    def add_patient(self, telegram_id, name, phone, branch, appointment_date=None):
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
             cursor.execute('''
                 INSERT OR REPLACE INTO patients 
                 (telegram_id, name, phone, branch, appointment_date, updated_at)
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ''', (telegram_id, name, phone, branch, appointment_date))
-            
             conn.commit()
             conn.close()
-            logger.info(f"✓ Patient {telegram_id} saved successfully")
             return True
         except Exception as e:
-            logger.error(f"✗ Error saving patient {telegram_id}: {str(e)}")
+            logger.error(f"✗ Error saving patient: {str(e)}")
             return False
-    
-    def get_patient(self, telegram_id: int) -> Optional[Dict]:
-        """Get patient information"""
+
+    def get_patient(self, telegram_id):
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
             cursor.execute('SELECT * FROM patients WHERE telegram_id = ?', (telegram_id,))
             row = cursor.fetchone()
             conn.close()
-            
             if row:
-                logger.debug(f"Patient {telegram_id} retrieved from database")
                 return {
-                    'id': row[0],
-                    'telegram_id': row[1],
-                    'name': row[2],
-                    'phone': row[3],
-                    'branch': row[4],
-                    'appointment_date': row[5],
-                    'created_at': row[6]
+                    'id': row[0], 'telegram_id': row[1], 'name': row[2],
+                    'phone': row[3], 'branch': row[4], 'appointment_date': row[5], 'created_at': row[6]
                 }
-            logger.debug(f"No patient found for ID {telegram_id}")
             return None
         except Exception as e:
-            logger.error(f"✗ Error fetching patient {telegram_id}: {str(e)}")
+            logger.error(f"✗ Error fetching patient: {str(e)}")
             return None
-    
-    def save_chat(self, telegram_id: int, message: str, response: str, api_used: str):
-        """Save chat history"""
+
+    def save_chat(self, telegram_id, message, response, api_used):
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
             cursor.execute('''
                 INSERT INTO chat_history (telegram_id, message, response, api_used)
                 VALUES (?, ?, ?, ?)
             ''', (telegram_id, message, response, api_used))
-            
             conn.commit()
             conn.close()
-            logger.debug(f"Chat history saved for user {telegram_id}")
         except Exception as e:
             logger.error(f"✗ Error saving chat history: {str(e)}")
-    
-    def get_patient_count(self) -> int:
-        """Get total patient count"""
+
+    def get_patient_count(self):
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute('SELECT COUNT(*) FROM patients')
             count = cursor.fetchone()[0]
             conn.close()
-            logger.debug(f"Total patient count: {count}")
             return count
         except Exception as e:
-            logger.error(f"✗ Error getting patient count: {str(e)}")
             return 0
 
-# ============================================================================
-# API INTEGRATIONS
-# ============================================================================
 
 class GroqAPI:
-    """Groq API integration for fast chat"""
-    
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.url = GROQ_API_URL
         self.model = "llama-3.1-70b-versatile"
-        logger.info(f"✓ Groq API initialized with model: {self.model}")
-    
-    async def chat(self, message: str, context: str = "") -> Optional[str]:
-        """Send message to Groq API"""
-        logger.debug(f"Groq chat request: {message[:100]}")
+
+    async def chat(self, message: str, context: str = "", system_prompt: str = None) -> Optional[str]:
         try:
-            system_prompt = """You are a helpful medical assistant for a GI/Liver specialist. 
-            Provide accurate, helpful medical information. Always recommend consulting with a doctor for serious concerns.
-            Be professional and compassionate."""
-            
+            if not system_prompt:
+                system_prompt = """أنت مساعد ذكاء اصطناعي متخصص في مجال أمراض الجهاز الهضمي والكبد.
+تتحدث باللغة العربية بشكل طبيعي وودي.
+إذا سلّم عليك أحد، رد عليه بشكل طبيعي وودي.
+تقدم معلومات طبية دقيقة وتنصح دائماً بمراجعة الطبيب للحالات الجدية.
+كن محترفاً ومتعاطفاً في ردودك."""
+
             if context:
-                system_prompt += f"\nPatient context: {context}"
-            
+                system_prompt += f"\nمعلومات المريض: {context}"
+
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json"
             }
-            
             payload = {
                 "model": self.model,
                 "messages": [
@@ -298,493 +226,286 @@ class GroqAPI:
                 "temperature": 0.7,
                 "max_tokens": 500
             }
-            
             async with httpx.AsyncClient(timeout=30.0) as client:
-                logger.debug("Sending request to Groq API...")
                 response = await client.post(self.url, json=payload, headers=headers)
                 response.raise_for_status()
-                
                 data = response.json()
-                result = data['choices'][0]['message']['content']
-                logger.info(f"✓ Groq API response received ({len(result)} chars)")
-                return result
-        
+                return data['choices'][0]['message']['content']
         except httpx.TimeoutException:
-            logger.error("✗ Groq API timeout")
-            return "Sorry, the response is taking too long. Please try again."
+            return "عذراً، الرد يأخذ وقتاً طويلاً. حاول مرة أخرى."
         except Exception as e:
             logger.error(f"✗ Groq API error: {str(e)}")
             return None
 
+
 class GeminiAPI:
-    """Google Gemini API for deep medical reasoning"""
-    
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.url = GEMINI_API_URL
-        logger.info("✓ Gemini API initialized")
-    
+
     async def analyze(self, query: str, context: str = "") -> Optional[str]:
-        """Deep medical analysis with Gemini"""
-        logger.debug(f"Gemini analysis request: {query[:100]}")
         try:
-            system_instruction = """You are an advanced medical AI assistant for GI/Liver disease specialists.
-            Provide detailed medical insights based on the query.
-            Include relevant medical considerations and recommendations for further evaluation."""
-            
+            system_instruction = """أنت مساعد طبي متقدم متخصص في أمراض الجهاز الهضمي والكبد.
+قدم تحليلاً طبياً مفصلاً باللغة العربية."""
             if context:
-                system_instruction += f"\nContext: {context}"
-            
+                system_instruction += f"\nالسياق: {context}"
             payload = {
-                "contents": [{
-                    "parts": [{"text": query}]
-                }],
-                "systemInstruction": {
-                    "parts": [{"text": system_instruction}]
-                },
-                "generationConfig": {
-                    "temperature": 0.7,
-                    "maxOutputTokens": 1000,
-                }
+                "contents": [{"parts": [{"text": query}]}],
+                "systemInstruction": {"parts": [{"text": system_instruction}]},
+                "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1000}
             }
-            
             async with httpx.AsyncClient(timeout=30.0) as client:
-                logger.debug("Sending request to Gemini API...")
-                response = await client.post(
-                    f"{self.url}?key={self.api_key}",
-                    json=payload
-                )
+                response = await client.post(f"{self.url}?key={self.api_key}", json=payload)
                 response.raise_for_status()
-                
                 data = response.json()
                 if 'candidates' in data and len(data['candidates']) > 0:
-                    result = data['candidates'][0]['content']['parts'][0]['text']
-                    logger.info(f"✓ Gemini API response received ({len(result)} chars)")
-                    return result
+                    return data['candidates'][0]['content']['parts'][0]['text']
                 return None
-        
-        except httpx.TimeoutException:
-            logger.error("✗ Gemini API timeout")
-            return "Analysis is taking too long. Please try again."
         except Exception as e:
             logger.error(f"✗ Gemini API error: {str(e)}")
             return None
 
-# ============================================================================
-# TELEGRAM BOT HANDLERS
-# ============================================================================
 
 class MedicalBot:
-    """Main bot class"""
-    
     def __init__(self):
-        logger.info("Initializing MedicalBot class...")
         self.db = PatientDatabase()
         self.groq = GroqAPI(GROQ_API_KEY)
         self.gemini = GeminiAPI(GEMINI_API_KEY)
         self.user_sessions = {}
-        logger.info("✓ MedicalBot initialized successfully")
-    
+
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start command"""
         user_id = update.effective_user.id
         user_name = update.effective_user.first_name
-        
-        logger.info(f"User {user_id} ({user_name}) started the bot")
-        
-        # Get or create patient
-        patient = self.db.get_patient(user_id)
-        
-        welcome_msg = f"""🏥 Welcome to Medical Appointments & Chat System
-        
-Hello {user_name}! 👋
+        welcome_msg = f"""🏥 أهلاً وسهلاً في نظام المواعيد الطبية
 
-This is a specialized system for GI/Liver disease appointments and medical consultation.
+مرحباً {user_name}! 👋
 
-Choose what you'd like to do:
+أنا مساعدك الذكي المتخصص في أمراض الجهاز الهضمي والكبد.
+يمكنك التحدث معي بشكل طبيعي أو اختيار أحد الخيارات:
 """
-        
         keyboard = [
-            ["📅 Book Appointment"],
-            ["💬 Chat with AI", "🔬 Medical Analysis"],
-            ["👤 My Profile", "❓ Help"]
+            ["📅 حجز موعد"],
+            ["💬 محادثة ذكاء اصطناعي", "🔬 تحليل طبي"],
+            ["👤 ملفي الشخصي", "❓ مساعدة"]
         ]
-        
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        
         await update.message.reply_text(welcome_msg, reply_markup=reply_markup)
-        logger.info(f"✓ Start message sent to user {user_id}")
-    
+
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Help command"""
-        user_id = update.effective_user.id
-        logger.info(f"User {user_id} requested help")
-        
-        help_text = """🆘 Help & Information
+        help_text = """🆘 المساعدة والمعلومات
 
-📅 **Book Appointment**
-Reserve a slot at Cairo or Sherbin branch
+📅 **حجز موعد** - احجز في فرع القاهرة أو شربين
+💬 **محادثة AI** - اسأل أي سؤال طبي
+🔬 **تحليل طبي** - تحليل طبي عميق
+👤 **ملفي** - بياناتك المحفوظة
 
-💬 **Chat with AI (Groq)**
-Fast chat for general medical questions using Llama 3 AI
+يمكنك أيضاً الكتابة مباشرة وسأرد عليك! 😊
 
-🔬 **Medical Analysis (Gemini)**
-Deep medical analysis and reasoning
-
-👤 **My Profile**
-View your saved information
-
-✉️ **Contact Us**
-Cairo: +20XXXXXXXXX
-Sherbin: +20XXXXXXXXX
-
-⚠️ **Important**: This system is for information only. Always consult with a doctor for serious concerns.
-"""
+⚠️ هذا النظام للمعلومات فقط. استشر طبيبك دائماً للحالات الجدية."""
         await update.message.reply_text(help_text)
-        logger.info(f"✓ Help message sent to user {user_id}")
-    
-    # ========== Appointment Booking ==========
-    
-    async def book_appointment(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start booking flow"""
-        user_id = update.effective_user.id
-        logger.info(f"User {user_id} initiated appointment booking")
-        
-        patient = self.db.get_patient(user_id)
-        
-        context.user_data['booking'] = {}
-        
-        if patient:
-            msg = f"""Already have info for you:
-Name: {patient['name']}
-Phone: {patient['phone']}
 
-Want to update? Or proceed with booking?"""
-            keyboard = [
-                ["Update Info", "Proceed with Booking"],
-                ["Cancel"]
-            ]
+    async def handle_general_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """رد على أي رسالة عادية بالذكاء الاصطناعي"""
+        user_id = update.effective_user.id
+        message = update.message.text
+
+        await update.message.chat.send_action("typing")
+
+        patient = self.db.get_patient(user_id)
+        context_str = f"المريض: {patient['name']}" if patient else ""
+
+        response = await self.groq.chat(message, context_str)
+
+        if response:
+            await update.message.reply_text(response)
+        else:
+            await update.message.reply_text("عذراً، حدث خطأ. حاول مرة أخرى. 🙏")
+
+    async def book_appointment(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        patient = self.db.get_patient(user_id)
+        context.user_data['booking'] = {}
+        if patient:
+            msg = f"""لدينا بياناتك بالفعل:
+الاسم: {patient['name']}
+الهاتف: {patient['phone']}
+
+هل تريد التحديث أم المتابعة؟"""
+            keyboard = [["تحديث البيانات", "متابعة الحجز"], ["إلغاء"]]
             reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             await update.message.reply_text(msg, reply_markup=reply_markup)
-            logger.info(f"User {user_id} has existing profile, showing options")
             return STATE_BOOKING_START
         else:
-            await update.message.reply_text("📝 Let's create your appointment!\n\nWhat's your full name?")
-            logger.info(f"User {user_id} starting new booking")
+            await update.message.reply_text("📝 لنبدأ حجز موعدك!\n\nما اسمك الكامل؟")
             return STATE_BOOKING_NAME
-    
+
     async def booking_get_name(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Get patient name"""
-        user_id = update.effective_user.id
-        name = update.message.text
-        context.user_data['booking']['name'] = name
-        logger.info(f"User {user_id} provided name: {name}")
-        
-        await update.message.reply_text("📞 What's your phone number?")
+        context.user_data['booking']['name'] = update.message.text
+        await update.message.reply_text("📞 ما رقم هاتفك؟")
         return STATE_BOOKING_PHONE
-    
+
     async def booking_get_phone(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Get patient phone"""
-        user_id = update.effective_user.id
-        phone = update.message.text
-        context.user_data['booking']['phone'] = phone
-        logger.info(f"User {user_id} provided phone: {phone}")
-        
-        msg = "🏢 Which branch would you prefer?\n\n1️⃣ Cairo\n2️⃣ Sherbin"
-        keyboard = [
-            ["Cairo"],
-            ["Sherbin"],
-            ["Cancel"]
-        ]
+        context.user_data['booking']['phone'] = update.message.text
+        keyboard = [["القاهرة"], ["شربين"], ["إلغاء"]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        
-        await update.message.reply_text(msg, reply_markup=reply_markup)
+        await update.message.reply_text("🏢 أي فرع تفضل؟\n\n1️⃣ القاهرة\n2️⃣ شربين", reply_markup=reply_markup)
         return STATE_BOOKING_BRANCH
-    
+
     async def booking_get_branch(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Get preferred branch"""
-        user_id = update.effective_user.id
-        branch = update.message.text.lower()
-        
-        logger.debug(f"User {user_id} selected branch: {branch}")
-        
-        if branch not in BRANCHES:
-            logger.warning(f"User {user_id} provided invalid branch: {branch}")
-            await update.message.reply_text("Please choose Cairo or Sherbin")
+        text = update.message.text.lower()
+        branch_map = {"القاهرة": "cairo", "cairo": "cairo", "شربين": "sherbin", "sherbin": "sherbin"}
+        branch = branch_map.get(text)
+        if not branch:
+            await update.message.reply_text("اختر القاهرة أو شربين")
             return STATE_BOOKING_BRANCH
-        
         context.user_data['booking']['branch'] = branch
-        
         branch_info = BRANCHES[branch]
-        msg = f"""✅ Branch Selected: {branch_info['name']}
-Address: {branch_info['address']}
-Phone: {branch_info['phone']}
+        msg = f"""✅ الفرع: {branch_info['name']}
+العنوان: {branch_info['address']}
+الهاتف: {branch_info['phone']}
 
-📅 What date would you prefer? (format: YYYY-MM-DD or write 'ASAP')"""
-        
-        reply_markup = ReplyKeyboardRemove()
-        await update.message.reply_text(msg, reply_markup=reply_markup)
+📅 ما التاريخ المفضل لديك؟ (مثال: 2026-03-15 أو اكتب 'أقرب وقت')"""
+        await update.message.reply_text(msg, reply_markup=ReplyKeyboardRemove())
         return STATE_BOOKING_DATE
-    
+
     async def booking_get_date(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Get appointment date"""
-        user_id = update.effective_user.id
-        date_str = update.message.text
-        context.user_data['booking']['date'] = date_str
-        logger.info(f"User {user_id} selected date: {date_str}")
-        
-        # Confirm booking
+        context.user_data['booking']['date'] = update.message.text
         booking = context.user_data['booking']
-        msg = f"""📋 **Booking Summary**
+        msg = f"""📋 ملخص الحجز
 
-Name: {booking['name']}
-Phone: {booking['phone']}
-Branch: {booking['branch'].upper()}
-Preferred Date: {booking['date']}
+الاسم: {booking['name']}
+الهاتف: {booking['phone']}
+الفرع: {booking['branch'].upper()}
+التاريخ: {booking['date']}
 
-Confirm this booking?"""
-        
-        keyboard = [
-            ["✅ Confirm"],
-            ["❌ Cancel"]
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        
-        await update.message.reply_text(msg, reply_markup=reply_markup)
+تأكيد الحجز؟"""
+        keyboard = [["✅ تأكيد"], ["❌ إلغاء"]]
+        await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
         return STATE_BOOKING_CONFIRM
-    
+
     async def booking_confirm(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Confirm and save booking"""
         user_id = update.effective_user.id
-        
-        if update.message.text == "✅ Confirm":
+        if update.message.text == "✅ تأكيد":
             booking = context.user_data['booking']
-            logger.info(f"User {user_id} confirming booking")
-            
-            success = self.db.add_patient(
-                user_id,
-                booking['name'],
-                booking['phone'],
-                booking['branch'],
-                booking['date']
-            )
-            
+            success = self.db.add_patient(user_id, booking['name'], booking['phone'], booking['branch'], booking['date'])
             if success:
-                msg = """✅ **Booking Confirmed!**
+                msg = """✅ تم تأكيد الحجز!
 
-Your appointment request has been saved. The doctor's office will contact you shortly to confirm the exact time.
+سيتواصل معك فريق العيادة لتأكيد الوقت المناسب.
 
-📞 If you don't receive a call within 24 hours, please contact us:
-Cairo: +20XXXXXXXXX
-Sherbin: +20XXXXXXXXX"""
-                logger.info(f"✓ Appointment confirmed for user {user_id}")
+📞 إذا لم تتلقَ اتصالاً خلال 24 ساعة:
+القاهرة: +20XXXXXXXXX
+شربين: +20XXXXXXXXX"""
             else:
-                msg = "❌ Error saving booking. Please try again."
-                logger.error(f"✗ Failed to save appointment for user {user_id}")
+                msg = "❌ خطأ في حفظ الحجز. حاول مرة أخرى."
         else:
-            msg = "❌ Booking cancelled."
-            logger.info(f"User {user_id} cancelled booking")
-        
-        keyboard = [
-            ["📅 New Booking"],
-            ["💬 Chat", "👤 Profile"],
-            ["🏠 Home"]
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        
-        await update.message.reply_text(msg, reply_markup=reply_markup)
+            msg = "❌ تم إلغاء الحجز."
+        keyboard = [["📅 حجز جديد"], ["💬 محادثة", "👤 ملفي"], ["🏠 الرئيسية"]]
+        await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
         return ConversationHandler.END
-    
-    # ========== Chat Functions ==========
-    
-    async def chat_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Start chat mode"""
-        user_id = update.effective_user.id
-        logger.info(f"User {user_id} starting chat mode")
-        
-        msg = """💬 **AI Chat Mode**
 
-Choose your AI:
-1️⃣ **Groq (Fast Chat)** - Quick responses using Llama 3
-2️⃣ **Gemini (Deep Analysis)** - Detailed medical reasoning"""
-        
-        keyboard = [
-            ["Groq - Fast Chat"],
-            ["Gemini - Deep Analysis"],
-            ["Cancel"]
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        
-        await update.message.reply_text(msg, reply_markup=reply_markup)
+    async def chat_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        msg = """💬 وضع المحادثة الذكية
+
+اختر نوع الذكاء الاصطناعي:
+1️⃣ Groq - سريع للأسئلة العامة
+2️⃣ Gemini - تحليل طبي عميق"""
+        keyboard = [["Groq - محادثة سريعة"], ["Gemini - تحليل عميق"], ["إلغاء"]]
+        await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
         return STATE_CHAT_MODE
-    
+
     async def select_chat_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Select chat API"""
-        user_id = update.effective_user.id
         choice = update.message.text
-        
-        logger.info(f"User {user_id} selected chat mode: {choice}")
-        
         if "Groq" in choice:
             context.user_data['chat_mode'] = 'groq'
-            await update.message.reply_text("🤖 Groq Selected! Ask your medical question:")
-            logger.debug(f"User {user_id} using Groq mode")
+            await update.message.reply_text("🤖 Groq جاهز! اسألني أي سؤال:")
         elif "Gemini" in choice:
             context.user_data['chat_mode'] = 'gemini'
-            await update.message.reply_text("🧠 Gemini Selected! Ask for medical analysis:")
-            logger.debug(f"User {user_id} using Gemini mode")
+            await update.message.reply_text("🧠 Gemini جاهز! اكتب سؤالك للتحليل:")
         else:
-            logger.info(f"User {user_id} cancelled chat mode selection")
             return ConversationHandler.END
-        
         return STATE_CHAT_INPUT
-    
+
     async def handle_chat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle chat messages"""
         user_id = update.effective_user.id
         message = update.message.text
         chat_mode = context.user_data.get('chat_mode', 'groq')
-        
-        logger.info(f"User {user_id} sent message ({len(message)} chars) via {chat_mode}")
-        
-        # Get patient context
         patient = self.db.get_patient(user_id)
-        context_str = f"Patient: {patient['name']}, Branch: {patient['branch']}" if patient else ""
-        
-        # Show typing indicator
-        logger.debug(f"Showing typing indicator for user {user_id}")
+        context_str = f"المريض: {patient['name']}" if patient else ""
         await update.message.chat.send_action("typing")
-        
         try:
             if chat_mode == 'groq':
-                logger.debug("Calling Groq API...")
                 response = await self.groq.chat(message, context_str)
                 api_used = "Groq"
             else:
-                logger.debug("Calling Gemini API...")
                 response = await self.gemini.analyze(message, context_str)
                 api_used = "Gemini"
-            
             if response:
-                # Save to database
                 if patient:
                     self.db.save_chat(user_id, message, response, api_used)
-                
-                # Format response
-                response_text = response[:1000]  # Limit to 1000 chars
+                response_text = response[:1000]
                 if len(response) > 1000:
-                    response_text += "\n\n...(truncated)"
-                
-                logger.info(f"✓ Response sent to user {user_id}")
-                await update.message.reply_text(
-                    f"🤖 **{api_used} Response**:\n\n{response_text}"
-                )
+                    response_text += "\n\n...(مختصر)"
+                await update.message.reply_text(f"🤖 {api_used}:\n\n{response_text}")
             else:
-                logger.error(f"No response received from API for user {user_id}")
-                await update.message.reply_text("❌ Error getting response. Please try again.")
-        
+                await update.message.reply_text("❌ خطأ في الرد. حاول مرة أخرى.")
         except Exception as e:
-            logger.error(f"✗ Chat error for user {user_id}: {str(e)}")
-            await update.message.reply_text(f"❌ Error: {str(e)}")
-        
-        # Ask for another question
-        keyboard = [
-            ["Ask Another Question"],
-            ["Switch Mode", "Go Home"],
-            ["Exit Chat"]
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        
-        await update.message.reply_text("What else would you like to know?", reply_markup=reply_markup)
+            await update.message.reply_text(f"❌ خطأ: {str(e)}")
+        keyboard = [["سؤال آخر"], ["تغيير الوضع", "الرئيسية"], ["خروج"]]
+        await update.message.reply_text("ماذا تريد أن تعرف أيضاً؟", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
         return STATE_CHAT_INPUT
-    
-    # ========== Profile ==========
-    
+
     async def show_profile(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show patient profile"""
         user_id = update.effective_user.id
-        logger.info(f"User {user_id} viewing profile")
-        
         patient = self.db.get_patient(user_id)
-        
         if patient:
-            msg = f"""👤 **Your Profile**
+            msg = f"""👤 ملفك الشخصي
 
-Name: {patient['name']}
-Phone: {patient['phone']}
-Preferred Branch: {patient['branch'].upper()}
-Appointment Date: {patient['appointment_date'] or 'Not scheduled'}
-Registered: {patient['created_at']}"""
-            logger.debug(f"Profile retrieved for user {user_id}")
+الاسم: {patient['name']}
+الهاتف: {patient['phone']}
+الفرع: {patient['branch'].upper()}
+تاريخ الموعد: {patient['appointment_date'] or 'غير محدد'}
+تاريخ التسجيل: {patient['created_at']}"""
         else:
-            msg = "No profile information. Please book an appointment first."
-            logger.debug(f"No profile found for user {user_id}")
-        
-        keyboard = [
-            ["📅 Update Appointment"],
-            ["🏠 Home"]
-        ]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        
-        await update.message.reply_text(msg, reply_markup=reply_markup)
-    
-    # ========== Admin/Stats ==========
-    
+            msg = "لا توجد بيانات. احجز موعداً أولاً."
+        keyboard = [["📅 تحديث الموعد"], ["🏠 الرئيسية"]]
+        await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+
     async def stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Admin stats"""
         user_id = update.effective_user.id
-        logger.info(f"User {user_id} requested stats")
-        
-        # Only allow specific admin ID
         if ADMIN_ID and str(user_id) == str(ADMIN_ID):
-            total_patients = self.db.get_patient_count()
+            total = self.db.get_patient_count()
             db_size = Path('patients.db').stat().st_size / 1024 if Path('patients.db').exists() else 0
-            
-            msg = f"""📊 **System Stats**
+            msg = f"""📊 إحصائيات النظام
 
-Total Patients: {total_patients}
-Database: {db_size:.2f} KB
-Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
-            
-            logger.info(f"Stats displayed to admin {user_id}")
+إجمالي المرضى: {total}
+حجم قاعدة البيانات: {db_size:.2f} KB
+آخر تحديث: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
         else:
-            msg = "❌ Unauthorized - Only admin can access this"
-            logger.warning(f"Unauthorized stats access attempt by user {user_id}")
-        
+            msg = "❌ غير مصرح - للمشرف فقط"
         await update.message.reply_text(msg)
-    
-    # ========== Error Handler ==========
-    
+
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle errors"""
-        logger.error(f"Update {update} caused error {context.error}")
-        logger.error(f"Error traceback: {context.error}")
-        
+        logger.error(f"Error: {context.error}")
         if update and update.message:
             try:
-                await update.message.reply_text("❌ An error occurred. Please try again.")
-            except Exception as e:
-                logger.error(f"Could not send error message: {str(e)}")
-    
-    # ========== Main Handler Router ==========
-    
+                await update.message.reply_text("❌ حدث خطأ. حاول مرة أخرى.")
+            except:
+                pass
+
     def create_handlers(self) -> Application:
-        """Create and return application with handlers"""
-        logger.info("Creating application handlers...")
-        
         app = Application.builder().token(TELEGRAM_TOKEN).build()
-        
-        # Conversation handler for booking
+
         booking_handler = ConversationHandler(
             entry_points=[
-                MessageHandler(filters.Regex("^📅 Book Appointment$"), self.book_appointment),
-                MessageHandler(filters.Regex("^Update Info$"), self.book_appointment),
-                MessageHandler(filters.Regex("^Proceed with Booking$"), self.book_appointment),
+                MessageHandler(filters.Regex("^📅 حجز موعد$"), self.book_appointment),
+                MessageHandler(filters.Regex("^تحديث البيانات$"), self.book_appointment),
+                MessageHandler(filters.Regex("^متابعة الحجز$"), self.book_appointment),
             ],
             states={
                 STATE_BOOKING_START: [
-                    MessageHandler(filters.Regex("^Update Info$"), self.book_appointment),
-                    MessageHandler(filters.Regex("^Proceed with Booking$"), self.book_appointment),
+                    MessageHandler(filters.Regex("^تحديث البيانات$"), self.book_appointment),
+                    MessageHandler(filters.Regex("^متابعة الحجز$"), self.book_appointment),
                     MessageHandler(filters.TEXT, self.booking_get_name),
                 ],
                 STATE_BOOKING_NAME: [MessageHandler(filters.TEXT, self.booking_get_name)],
@@ -793,134 +514,66 @@ Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
                 STATE_BOOKING_DATE: [MessageHandler(filters.TEXT, self.booking_get_date)],
                 STATE_BOOKING_CONFIRM: [MessageHandler(filters.TEXT, self.booking_confirm)],
             },
-            fallbacks=[MessageHandler(filters.Regex("^Cancel$"), lambda u, c: ConversationHandler.END)]
+            fallbacks=[MessageHandler(filters.Regex("^إلغاء$"), lambda u, c: ConversationHandler.END)]
         )
-        
-        # Conversation handler for chat
+
         chat_handler = ConversationHandler(
             entry_points=[
-                MessageHandler(filters.Regex("^💬 Chat with AI$"), self.chat_start),
-                MessageHandler(filters.Regex("^💬 Chat$"), self.chat_start),
+                MessageHandler(filters.Regex("^💬 محادثة ذكاء اصطناعي$"), self.chat_start),
+                MessageHandler(filters.Regex("^💬 محادثة$"), self.chat_start),
+                MessageHandler(filters.Regex("^🔬 تحليل طبي$"), self.chat_start),
             ],
             states={
                 STATE_CHAT_MODE: [MessageHandler(filters.TEXT, self.select_chat_mode)],
                 STATE_CHAT_INPUT: [
-                    MessageHandler(filters.Regex("^Ask Another Question$"), self.handle_chat),
-                    MessageHandler(filters.Regex("^Switch Mode$"), self.chat_start),
-                    MessageHandler(filters.TEXT & ~filters.Regex("^Go Home$|^Exit Chat$"), self.handle_chat),
+                    MessageHandler(filters.Regex("^سؤال آخر$"), self.handle_chat),
+                    MessageHandler(filters.Regex("^تغيير الوضع$"), self.chat_start),
+                    MessageHandler(filters.TEXT & ~filters.Regex("^الرئيسية$|^خروج$"), self.handle_chat),
                 ],
             },
-            fallbacks=[MessageHandler(filters.Regex("^Go Home$|^Exit Chat$|^Cancel$"), lambda u, c: ConversationHandler.END)]
+            fallbacks=[MessageHandler(filters.Regex("^الرئيسية$|^خروج$|^إلغاء$"), lambda u, c: ConversationHandler.END)]
         )
-        
-        # Add handlers
-        logger.info("Adding command handlers...")
+
         app.add_handler(CommandHandler("start", self.start))
         app.add_handler(CommandHandler("help", self.help_command))
         app.add_handler(CommandHandler("profile", self.show_profile))
         app.add_handler(CommandHandler("stats", self.stats))
-        
-        logger.info("Adding conversation handlers...")
         app.add_handler(booking_handler)
         app.add_handler(chat_handler)
-        
-        # Medical analysis
-        app.add_handler(MessageHandler(filters.Regex("^🔬 Medical Analysis$"), self.chat_start))
-        
-        # Profile button
-        app.add_handler(MessageHandler(filters.Regex("^👤 My Profile$"), self.show_profile))
-        
-        # Help button
-        app.add_handler(MessageHandler(filters.Regex("^❓ Help$"), self.help_command))
-        
-        # Home
-        app.add_handler(MessageHandler(filters.Regex("^🏠 Home$"), self.start))
-        
-        # Error handler
-        logger.info("Adding error handler...")
+        app.add_handler(MessageHandler(filters.Regex("^👤 ملفي الشخصي$"), self.show_profile))
+        app.add_handler(MessageHandler(filters.Regex("^❓ مساعدة$"), self.help_command))
+        app.add_handler(MessageHandler(filters.Regex("^🏠 الرئيسية$"), self.start))
+
+        # Handler عام لأي رسالة - الذكاء الاصطناعي يرد على أي كلام
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_general_message))
+
         app.add_error_handler(self.error_handler)
-        
-        logger.info("✓ All handlers created successfully")
         return app
 
-# ============================================================================
-# MAIN FUNCTION - POLLING VERSION FOR TERMUX
-# ============================================================================
 
 def main():
-    """Main entry point with polling for Termux"""
-    
     logger.info("=" * 80)
     logger.info("STARTING MEDICAL BOT - POLLING MODE")
     logger.info("=" * 80)
-    
-    # Validate tokens
+
     if not TELEGRAM_TOKEN:
-        logger.error("CRITICAL: TELEGRAM_TOKEN not set in .env")
-        logger.error(f"Expected .env file at: {script_dir / '.env'}")
-        print("\n" + "=" * 80)
-        print("❌ CRITICAL ERROR: TELEGRAM_TOKEN NOT SET")
-        print("=" * 80)
-        print(f"Please create a .env file at: {script_dir / '.env'}")
-        print("\nExample .env content:")
-        print("TELEGRAM_TOKEN=your_token_here")
-        print("GROQ_API_KEY=your_groq_key")
-        print("GEMINI_API_KEY=your_gemini_key")
-        print("ADMIN_ID=your_id")
-        print("=" * 80 + "\n")
+        logger.error("CRITICAL: TELEGRAM_TOKEN not set")
         sys.exit(1)
-    
-    if not GROQ_API_KEY:
-        logger.warning("WARNING: GROQ_API_KEY not set - Groq chat will not work")
-    
-    if not GEMINI_API_KEY:
-        logger.warning("WARNING: GEMINI_API_KEY not set - Gemini analysis will not work")
-    
-    logger.info("Creating bot instance...")
+
     bot = MedicalBot()
-    
-    logger.info("Creating application...")
     app = bot.create_handlers()
-    
-    logger.info("=" * 80)
-    logger.info("STARTING POLLING")
-    logger.info("=" * 80)
-    logger.info("Bot token: " + (TELEGRAM_TOKEN[:10] + "..." if TELEGRAM_TOKEN else "NOT SET"))
-    logger.info("Polling is active and listening for messages...")
-    logger.info("=" * 80)
-    
-    # Print startup message to console
-    print("\n" + "=" * 80)
-    print("🚀 MEDICAL BOT STARTED SUCCESSFULLY")
-    print("=" * 80)
-    print(f"✓ Script directory: {script_dir}")
-    print(f"✓ .env file: {env_file} ({'Found' if env_file.exists() else 'NOT FOUND'})")
-    print(f"✓ Database: patients.db")
-    print(f"✓ Log file: logs/medical_bot.log")
-    print(f"✓ Polling enabled: YES")
-    print(f"✓ Debug logging: ENABLED")
-    print(f"✓ Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 80)
-    print("\n📱 Bot is now listening for messages from Telegram...")
-    print("✅ Press Ctrl+C to stop the bot\n")
-    print("=" * 80 + "\n")
-    
+
     logger.info("Bot is now listening for messages...")
-    
+    print("\n🚀 MEDICAL BOT STARTED SUCCESSFULLY\n")
+
     try:
-        # Run with polling
         app.run_polling(allowed_updates=Update.ALL_TYPES)
     except KeyboardInterrupt:
-        logger.info("Bot stopped by user (Ctrl+C)")
-        print("\n\n" + "=" * 80)
-        print("⏹️  BOT STOPPED")
-        print("=" * 80)
-        print(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-        print("=" * 80 + "\n")
+        logger.info("Bot stopped by user")
     except Exception as e:
         logger.error(f"CRITICAL ERROR: {str(e)}")
-        print(f"\n\n❌ CRITICAL ERROR: {str(e)}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
