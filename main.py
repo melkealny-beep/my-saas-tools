@@ -357,74 +357,68 @@ class MedicalBot:
             await update.message.reply_text("عذراً، حدث خطأ. حاول مرة أخرى. 🙏")
 
     async def book_appointment(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        patient = self.db.get_patient(user_id)
         context.user_data['booking'] = {}
-        if patient:
-            msg = f"""لدينا بياناتك بالفعل:
-الاسم: {patient['name']}
-الهاتف: {patient['phone']}
-
-هل تريد التحديث أم المتابعة؟"""
-            keyboard = [["تحديث البيانات", "متابعة الحجز"], ["إلغاء"]]
-            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-            await update.message.reply_text(msg, reply_markup=reply_markup)
-            return STATE_BOOKING_START
-        else:
-            await update.message.reply_text("📝 لنبدأ حجز موعدك!\n\nما اسمك الكامل؟")
-            return STATE_BOOKING_NAME
+        await update.message.reply_text(
+            "😊 أهلاً! هنحجزلك موعد دلوقتي.\n\nأولاً، ما اسمك الكامل؟",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return STATE_BOOKING_NAME
 
     async def booking_get_name(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        context.user_data['booking']['name'] = update.message.text
-        await update.message.reply_text("📞 ما رقم هاتفك؟")
+        name = update.message.text.strip()
+        if len(name) < 3:
+            await update.message.reply_text("من فضلك اكتب اسمك الكامل صح 😊")
+            return STATE_BOOKING_NAME
+        context.user_data['booking']['name'] = name
+        await update.message.reply_text(
+            f"تمام يا {name} 👍\n\nرقم تليفونك إيه؟"
+        )
         return STATE_BOOKING_PHONE
 
     async def booking_get_phone(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        context.user_data['booking']['phone'] = update.message.text
-        keyboard = [["شربين"], ["إلغاء"]]
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        await update.message.reply_text("🏢 الفرع المتاح:\n\n📍 شربين", reply_markup=reply_markup)
-        return STATE_BOOKING_BRANCH
-
-    async def booking_get_branch(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        text = update.message.text.lower()
-        branch_map = {"شربين": "sherbin", "sherbin": "sherbin"}
-        branch = branch_map.get(text)
-        if not branch:
-            await update.message.reply_text("اختر شربين")
-            return STATE_BOOKING_BRANCH
-        context.user_data['booking']['branch'] = branch
-        branch_info = BRANCHES[branch]
-        msg = f"""✅ الفرع: {branch_info['name']}
-العنوان: {branch_info['address']}
-الهاتف: {branch_info['phone']}
-
-📅 ما التاريخ المفضل لديك؟ (مثال: 2026-03-15 أو اكتب 'أقرب وقت')"""
-        await update.message.reply_text(msg, reply_markup=ReplyKeyboardRemove())
+        phone = update.message.text.strip()
+        if len(phone) < 8:
+            await update.message.reply_text("⚠️ رقم التليفون مش صح، حاول تاني.")
+            return STATE_BOOKING_PHONE
+        context.user_data['booking']['phone'] = phone
+        context.user_data['booking']['branch'] = "sherbin"
+        await update.message.reply_text(
+            "👍 تمام!\n\nإيه اليوم اللي بيناسبك؟\n🗓 المواعيد المتاحة: السبت والثلاثاء والأحد"
+        )
         return STATE_BOOKING_DATE
 
     async def booking_get_date(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        context.user_data['booking']['date'] = update.message.text
+        context.user_data['booking']['date'] = update.message.text.strip()
         booking = context.user_data['booking']
-        msg = f"""📋 ملخص الحجز
+        msg = f"""✅ تمام! خليني أتأكد من البيانات:
 
-الاسم: {booking['name']}
-الهاتف: {booking['phone']}
-الفرع: {booking['branch'].upper()}
-التاريخ: {booking['date']}
+👤 الاسم: {booking['name']}
+📞 التليفون: {booking['phone']}
+📅 اليوم: {booking['date']}
+📍 العيادة: شربين - شارع باتا أمام مسجد الرحمة
 
-تأكيد الحجز؟"""
-        keyboard = [["✅ تأكيد"], ["❌ إلغاء"]]
-        await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+البيانات صح؟"""
+        keyboard = [["✅ أيوه، أكد الحجز"], ["❌ لأ، غير"]]
+        await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True))
         return STATE_BOOKING_CONFIRM
 
     async def booking_confirm(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
-        if update.message.text == "✅ تأكيد":
+        text = update.message.text
+
+        if "❌" in text or "لأ" in text or "غير" in text:
+            await update.message.reply_text(
+                "تمام! ابدأ من الأول، اكتب اسمك الكامل:",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            context.user_data['booking'] = {}
+            return STATE_BOOKING_NAME
+
+        if "✅" in text or "أيوه" in text or "اكد" in text or "تأكيد" in text:
             booking = context.user_data['booking']
             success = self.db.add_patient(user_id, booking['name'], booking['phone'], booking['branch'], booking['date'])
             if success:
-                msg = """✅ تم تأكيد الحجز!
+                msg = f"""🎉 تم الحجز بنجاح يا {booking['name']}!
 
 سيتواصل معك فريق عيادة د. أحمد سمير لتأكيد الوقت المناسب.
 
@@ -435,25 +429,26 @@ class MedicalBot:
                 # إشعار فوري للأدمن
                 if ADMIN_ID:
                     try:
-                        branch_info = BRANCHES.get(booking['branch'], {})
                         admin_msg = f"""🔔 حجز جديد!
 
 👤 الاسم: {booking['name']}
 📞 الهاتف: {booking['phone']}
-📍 الفرع: {branch_info.get('name', booking['branch'])}
-📅 التاريخ: {booking['date']}
+📍 الفرع: شربين
+📅 اليوم: {booking['date']}
 🆔 Telegram ID: {user_id}
 🕐 وقت الحجز: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
                         await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg)
                     except Exception as e:
                         logger.error(f"✗ Error notifying admin: {str(e)}")
             else:
-                msg = "❌ خطأ في حفظ الحجز. حاول مرة أخرى."
-        else:
-            msg = "❌ تم إلغاء الحجز."
-        keyboard = [["📅 حجز جديد"], ["💬 محادثة", "👤 ملفي"], ["🏠 الرئيسية"]]
-        await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-        return ConversationHandler.END
+                msg = "❌ حصل خطأ في الحفظ، حاول تاني من فضلك."
+
+            keyboard = [["📅 حجز موعد"], ["💬 محادثة ذكاء اصطناعي"], ["👤 ملفي الشخصي"]]
+            await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+            return ConversationHandler.END
+
+        await update.message.reply_text("اختار من الأزرار 👇")
+        return STATE_BOOKING_CONFIRM
 
     async def chat_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = """💬 وضع المحادثة الذكية
@@ -582,18 +577,16 @@ class MedicalBot:
         booking_handler = ConversationHandler(
             entry_points=[
                 MessageHandler(filters.Regex("^📅 حجز موعد$"), self.book_appointment),
-                MessageHandler(filters.Regex("^تحديث البيانات$"), self.book_appointment),
-                MessageHandler(filters.Regex("^متابعة الحجز$"), self.book_appointment),
+                MessageHandler(filters.Regex("(?i)(احجز|حجز|عايز احجز|عاوز احجز|ابي احجز|أريد حجز|موعد|حجزلي|حجزني)"), self.book_appointment),
             ],
             states={
-                STATE_BOOKING_START: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.book_appointment)],
                 STATE_BOOKING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.booking_get_name)],
                 STATE_BOOKING_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.booking_get_phone)],
-                STATE_BOOKING_BRANCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.booking_get_branch)],
                 STATE_BOOKING_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.booking_get_date)],
                 STATE_BOOKING_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.booking_confirm)],
             },
-            fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)]
+            fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+            allow_reentry=True
         )
 
         chat_handler = ConversationHandler(
