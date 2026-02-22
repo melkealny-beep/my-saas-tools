@@ -199,7 +199,7 @@ class GroqAPI:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.url = GROQ_API_URL
-        self.model = "llama-3.1-70b-versatile"
+        self.model = "llama-3.3-70b-versatile"
 
     async def chat(self, message: str, context: str = "", system_prompt: str = None) -> Optional[str]:
         try:
