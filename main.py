@@ -414,7 +414,7 @@ class MedicalBot:
             context.user_data['booking'] = {}
             return STATE_BOOKING_NAME
 
-        if "✅" in text or "أيوه" in text or "اكد" in text or "تأكيد" in text:
+        if any(word in text for word in ["✅", "أيوه", "اكد", "أكد", "تأكيد", "تمام", "صح", "نعم", "اه", "آه", "أه", "موافق"]):
             booking = context.user_data['booking']
             success = self.db.add_patient(user_id, booking['name'], booking['phone'], booking['branch'], booking['date'])
             if success:
@@ -577,7 +577,7 @@ class MedicalBot:
         booking_handler = ConversationHandler(
             entry_points=[
                 MessageHandler(filters.Regex("^📅 حجز موعد$"), self.book_appointment),
-                MessageHandler(filters.Regex("(?i)(احجز|حجز|عايز احجز|عاوز احجز|ابي احجز|أريد حجز|موعد|حجزلي|حجزني)"), self.book_appointment),
+                MessageHandler(filters.Regex("(?i)(^احجز$|^حجز$|عايز احجز|عاوز احجز|ابي احجز|أريد حجز|حجزلي|حجزني|📅 حجز موعد)"), self.book_appointment),
             ],
             states={
                 STATE_BOOKING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.booking_get_name)],
