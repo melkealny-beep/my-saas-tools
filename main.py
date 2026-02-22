@@ -182,6 +182,18 @@ class PatientDatabase:
         except Exception as e:
             logger.error(f"✗ Error saving chat history: {str(e)}")
 
+    def get_all_patients(self):
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('SELECT name, phone, branch, appointment_date, created_at FROM patients ORDER BY created_at DESC')
+            rows = cursor.fetchall()
+            conn.close()
+            return rows
+        except Exception as e:
+            logger.error(f"✗ Error fetching all patients: {str(e)}")
+            return []
+
     def get_patient_count(self):
         try:
             conn = sqlite3.connect(self.db_path)
@@ -419,6 +431,22 @@ class MedicalBot:
 📞 للتواصل: 01121173801
 📍 شربين - شارع باتا أمام مسجد الرحمة برج سراج
 🗓 مواعيد الكشف: السبت والثلاثاء والأحد"""
+
+                # إشعار فوري للأدمن
+                if ADMIN_ID:
+                    try:
+                        branch_info = BRANCHES.get(booking['branch'], {})
+                        admin_msg = f"""🔔 حجز جديد!
+
+👤 الاسم: {booking['name']}
+📞 الهاتف: {booking['phone']}
+📍 الفرع: {branch_info.get('name', booking['branch'])}
+📅 التاريخ: {booking['date']}
+🆔 Telegram ID: {user_id}
+🕐 وقت الحجز: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
+                        await context.bot.send_message(chat_id=ADMIN_ID, text=admin_msg)
+                    except Exception as e:
+                        logger.error(f"✗ Error notifying admin: {str(e)}")
             else:
                 msg = "❌ خطأ في حفظ الحجز. حاول مرة أخرى."
         else:
@@ -494,6 +522,38 @@ class MedicalBot:
         keyboard = [["📅 تحديث الموعد"], ["🏠 الرئيسية"]]
         await update.message.reply_text(msg, reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
 
+    async def show_bookings(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        if not ADMIN_ID or str(user_id) != str(ADMIN_ID):
+            await update.message.reply_text("❌ غير مصرح - للمشرف فقط")
+            return
+
+        patients = self.db.get_all_patients()
+        if not patients:
+            await update.message.reply_text("📭 لا توجد حجوزات بعد.")
+            return
+
+        total = len(patients)
+        msg = f"📋 قائمة الحجوزات ({total} حجز)\n" + "─" * 30 + "\n\n"
+
+        for i, row in enumerate(patients, 1):
+            name, phone, branch, date, created_at = row
+            branch_name = BRANCHES.get(branch, {}).get('name', branch)
+            msg += f"#{i} 👤 {name}\n"
+            msg += f"📞 {phone}\n"
+            msg += f"📍 {branch_name}\n"
+            msg += f"📅 {date or 'غير محدد'}\n"
+            msg += f"🕐 {created_at[:16]}\n"
+            msg += "─" * 20 + "\n"
+
+            # إرسال على دفعات لو الرسالة طويلة
+            if len(msg) > 3500:
+                await update.message.reply_text(msg)
+                msg = ""
+
+        if msg:
+            await update.message.reply_text(msg)
+
     async def stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if ADMIN_ID and str(user_id) == str(ADMIN_ID):
@@ -551,6 +611,7 @@ class MedicalBot:
         app.add_handler(CommandHandler("start", self.start))
         app.add_handler(CommandHandler("help", self.help_command))
         app.add_handler(CommandHandler("stats", self.stats))
+        app.add_handler(CommandHandler("bookings", self.show_bookings))
         app.add_handler(booking_handler)
         app.add_handler(chat_handler)
         app.add_handler(MessageHandler(filters.Regex("^👤 ملفي الشخصي$"), self.show_profile))
